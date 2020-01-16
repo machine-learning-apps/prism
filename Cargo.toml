@@ -1,0 +1,15 @@
+[package]
+name = "prism"
+version = "0.1.0"
+authors = ["inc0 <inc007@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+hyper = "0.13"
+tokio = { version = "0.2", features = ["full"] }
+http = "0.2"
+futures = "0.3"
+tower-service = "0.3.0"
+crossbeam = "0.7.3"
