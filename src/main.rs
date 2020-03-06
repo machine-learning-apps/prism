@@ -1,18 +1,59 @@
 use std::sync::Arc;
+use std::io;
+use std::io::prelude::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::collections::HashMap;
 
 use std::thread;
 use crossbeam::channel as channel;
 
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Error, Request, Response, Server};
+use http::request::Parts;
 use crossbeam::queue::{SegQueue};
+
+use serde::{Serialize, Deserialize};
+use serde::ser::{SerializeStruct, Serializer};
+
+use bytes::buf::BufExt;
 
 
 struct ReqChannel {
-    request: Request<Body>,
+    request: String,
     sender: channel::Sender<Response<Body>>
+}
+
+#[derive(Debug, Copy, Clone)]
+struct SRequest<'a> {
+    headers: &'a Parts,
+    body: &'a String
+}
+
+impl Serialize for SRequest<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let req = &self.headers;
+        let mut state = serializer.serialize_struct("SRequest", 5)?;
+        state.serialize_field("uri", &req.uri.to_string())?;
+        state.serialize_field("method", &req.method.to_string())?;
+
+        let mut headers = HashMap::new();
+        for k in req.headers.keys() {
+
+            headers.insert(
+                k.to_string(),
+                req.headers[k].to_str().unwrap()
+            );
+        }
+
+        state.serialize_field("headers", &headers);
+        
+
+        state.end()
+    }
 }
 
 
@@ -62,7 +103,7 @@ async fn main() {
 
     let current_ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
 
-    let mut last_send = Arc::new(AtomicUsize::new(current_ts.as_millis() as usize));
+    let last_send = Arc::new(AtomicUsize::new(current_ts.as_millis() as usize));
 
     let q = Arc::new(SegQueue::new());  // q is our request queue
 
@@ -77,13 +118,25 @@ async fn main() {
         let qq = q.clone();
         let last_send_queue = last_send.clone();
         async move {
-            Ok::<_, Error>(service_fn(move |req| {
+            Ok::<_, Error>(service_fn(move |req: Request<Body>| {
+                
                 let qqq = qq.clone();
                 let last_send_queue = last_send_queue.clone();
                 async move {
+                    let (parts, body) = req.into_parts();
+                    
+                    let mut buffer = String::new();
+                    let whole_body = hyper::body::aggregate(body).await?;
+                    whole_body.reader().read_to_string(&mut buffer).unwrap();
+
+                    let sreq = SRequest{
+                        headers: &parts,
+                        body: &buffer
+                    };
+                    let serialized = serde_json::to_string(&sreq).unwrap();
                     let (sender, receiver) = channel::unbounded();
                     let rc = ReqChannel{
-                            request: req,
+                            request: serialized,
                             sender: sender
                         };
                     qqq.push(rc);
